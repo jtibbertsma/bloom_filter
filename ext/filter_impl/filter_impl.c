@@ -2,9 +2,9 @@
 #include "string_hash.h"
 
 #ifndef RB_OBJ_WRITE
-#define FILTER_SET_BLOCK(f,b) (f)->block = (b)
+#  define FILTER_SET_BLOCK(f,b) (f)->block = (b)
 #else
-#define FILTER_SET_BLOCK(f,b) RUBY_OBJ_WRITE((f), &(f)->block, (b))
+#  define FILTER_SET_BLOCK(f,b) RUBY_OBJ_WRITE((f), &(f)->block, (b))
 #endif
 
 #define FILTER_CHECK(f) do {                                                                \
@@ -18,6 +18,18 @@ struct filter {
   VALUE block;
   long *bitary;
 };
+
+static VALUE
+add_item(struct filter *filter, VALUE item)
+{
+  VALUE str;
+  const char *cstr;
+
+  FILTER_GET_STRING(filter, item, str, cstr);
+  HASH_ITERATE
+
+  return str;
+}
 
 static void
 filter_mark(void *ptr)
@@ -72,8 +84,10 @@ filter_allocate(VALUE klass)
 
 /*
  * call-seq:
- *   BloomFilter.new(capa)                    -> filter
- *   BloomFilter.new(capa) { |string| block } -> filter
+ *   BloomFilter.new(capa)                     -> filter
+ *   BloomFilter.new(capa)  { |string| block } -> filter
+ *   BloomFilter.new(array)                    -> filter
+ *   BloomFilter.new(array) { |string| block } -> filter
  *
  * Construct a new bloom filter.
  *
@@ -82,27 +96,53 @@ filter_allocate(VALUE klass)
  * the more optimal the resulting bloom array in terms of false positive rate
  * and memory usage.
  *
+ * Instead of passing in a capacity, an array can be passed in instead. In this case,
+ * the array length is used as the capacity, and item in the array is added to the
+ * filter. If the argument is not an array or a fixnum, then it should respond to
+ * <code>size</code> and <code>each</code>.
+ *
  * If a block is given, it will be called by <code>filter.query</code> when a
  * positive match is detected. The block can be set after initialization with
  * <code>filter.handler=</code>.
  */
 static VALUE
-filter_initialize(VALUE obj, VALUE capa)
+filter_initialize(VALUE obj, VALUE arg)
 {
-  long arycapa;
+  long nitems, arycapa;
   struct filter *filter;
+  VALUE *aryptr = 0, tmp;
+  int i, try_each = 0;
 
-  if (!FIXNUM_P(capa)) rb_raise(rb_eArgError, "Filter capacity must be a Fixnum");
-
-  arycapa = FIX2LONG(capa);
+  switch (TYPE(arg)) {
+  case T_FIXNUM:
+    nitems = FIX2LONG(arg);
+    break;
+  case T_ARRAY:
+    nitems = RARRAY_LEN(arg);
+    aryptr = RARRAY_CONST_PTR(arg);
+    break;
+  default:
+    try_each = 1;
+    tmp = rb_funcall(arg, rb_intern("size"), 0, NULL);
+    if (!FIXNUM_P(tmp)) rb_raise(rb_eArgError, "Invalid size");
+    nitems = FIX2LONG(tmp);
+  }
+  
   TypedData_Get_Struct(obj, struct filter, &filter_type, filter);
 
-  /* Currently arycapa is the desired number of elements; we need to get the
+  /* nitems is the desired number of elements; we need to get the
    * number of longs needed to have one byte per item in the filter.
    */
-  arycapa = (arycapa / sizeof(long)) + 1;
+  arycapa = GET_ARYCAPA(nitems);
   filter->arycapa = arycapa;
   if (arycapa > 0) filter->bitary = (long *)ruby_xcalloc(arycapa, sizeof(long));
+
+  /* deal with array arg and try_each cases */
+  if (aryptr) {
+    for (i = 0; i < nitems; ++i) {
+      add_item(filter, aryptr[i]);
+    }
+  }
 
   /* store block */
   if (rb_block_given_p()) {
@@ -110,6 +150,44 @@ filter_initialize(VALUE obj, VALUE capa)
   }
 
   return obj;
+}
+
+/*
+ * call-seq:
+ *   filter.add(item)   -> item.to_s
+ *   filter << item     -> item.to_s
+ *
+ * Add an item to the filter. Note that any object added to the filter is coerced
+ * into a string.
+ */
+static VALUE
+filter_add_item(VALUE obj, VALUE item)
+{
+  struct filter *filter;
+  TypedData_Get_Struct(obj, struct filter, &filter_type, filter);
+
+  return add_item(filter, item);
+}
+
+/*
+ * call-seq:
+ *   filter.include?(item)    -> Bool
+ *   filter.query(item)       -> Bool
+ *
+ * Test an item to see it it's in the filter. If a positive match is reported
+ * and the filter has a handler Proc, the proc will be called with the string
+ * object as the argument.
+ */
+static VALUE
+filter_query_item(VALUE obj, VALUE item)
+{
+  VALUE str;
+  const char *cstr;
+  struct filter *filter;
+
+  TypedData_Get_Struct(obj, struct filter, &filter_type, filter);
+  FILTER_GET_STRING(filter, item, str, cstr);
+  HASH_ITERATE
 }
 
 /*
@@ -143,51 +221,6 @@ filter_set_handler(VALUE obj, VALUE handler)
 
   FILTER_SET_BLOCK(filter, handler);
   return handler;
-}
-
-/*
- * call-seq:
- *   filter.add(item)   -> item.to_s
- *   filter << item     -> item.to_s
- *
- * Add an item to the filter. Note that any object added to the filter is coerced
- * into a string.
- */
-static VALUE
-filter_add_item(VALUE obj, VALUE item)
-{
-  VALUE str;
-  const char *cstr;
-  struct filter *filter;
-  int i;
-
-  TypedData_Get_Struct(obj, struct filter, &filter_type, filter);
-  FILTER_GET_STRING(filter, item, str, cstr);
-}
-
-/*
- * call-seq:
- *   filter.include?(item)    -> Bool
- *   filter.query(item)       -> Bool
- *
- * Test an item to see it it's in the filter. If a positive match is reported
- * and the filter has a handler Proc, the proc will be called with the string
- * object as the argument.
- */
-static VALUE
-filter_query_item(VALUE obj, VALUE item)
-{
-  VALUE str;
-  const char *cstr;
-  struct filter *filter;
-  int i;
-
-  TypedData_Get_Struct(obj, struct filter, &filter_type, filter);
-  FILTER_GET_STRING(filter, item, str, cstr);
-
-  for (i = 0; hashes[i] != 0; i++) {
-    hash_func func = hashes[i];
-  }
 }
 
 /*
