@@ -16,32 +16,32 @@ struct filter {
 #define GET_ARYCAPA(n) (n / sizeof(size_t))
 #define BITS_PER_SIZE_T (sizeof(size_t) * 8)
 #define TOTAL_BITS(f) ((f)->arycapa * BITS_PER_SIZE_T)
-#define BITS(f, bit) ((f)->bitary[bit / BITS_PER_SIZE_T])
+#define CHUNK(f, bit) ((f)->bitary[bit / BITS_PER_SIZE_T])
 #define BIT(bit) (1 << (bit % BITS_PER_SIZE_T))
 
-#define FILTER_SET_BIT(f, hash) do {    \
-  size_t _bit = hash % TOTAL_BITS(f);   \
-  BITS((f),_bit) |= BIT(_bit);          \
+#define FILTER_SET_BIT(f, hash) do {     \
+  size_t _bit = hash % TOTAL_BITS(f);    \
+  CHUNK((f),_bit) |= BIT(_bit);          \
 } while (0)
 
 #ifdef __GNUC__
-#define FILTER_GET_BIT(f, hash) ({      \
-  size_t _bit = hash % TOTAL_BITS(f);   \
-  BITS((f),_bit) | BIT(_bit);           \
+#define FILTER_GET_BIT(f, hash) ({       \
+  size_t _bit = hash % TOTAL_BITS(f);    \
+  CHUNK((f),_bit) | BIT(_bit);           \
 })
-#else
+#else   /* __GNUC__ */
 #define FILTER_GET_BIT(f, hash) filter_get_bit(f, hash)
 static size_t
 filter_get_bit(struct filter *filter, size_t hash)
 {
   size_t bit = hash % TOTAL_BITS(f);
-  return BITS(filter, bit) | BIT(bit);
+  return CHUNK(filter, bit) | BIT(bit);
 }
-#endif
+#endif  /* __GNUC__ */
 
 #define FILTER_CHECK(f) do {                                                                \
   if ((f)->bitary == 0) {                                                                   \
-    rb_raise(rb_eRuntimeError, "Uninitialized bloom filter (capacity %ld)", (f)->arycapa);  \
+    rb_raise(rb_eRuntimeError, "Uninitialized bloom filter (capacity %lu)", (f)->arycapa);  \
   }                                                                                         \
 } while (0)
 
@@ -92,7 +92,7 @@ filter_memsize(const void *ptr)
   size_t size = sizeof(struct filter);
 
   if (filter->bitary) {
-    size += sizeof(long) * filter->arycapa;
+    size += sizeof(size_t) * filter->arycapa;
   }
 
   return size;
@@ -185,7 +185,7 @@ filter_initialize(VALUE obj, VALUE arg)
   TypedData_Get_Struct(obj, struct filter, &filter_type, filter);
 
   /* nitems is the desired number of elements; we need to get the
-   * number of longs needed to have one byte per item in the filter.
+   * number of size_t needed to have one byte per item in the filter.
    */
   arycapa = GET_ARYCAPA(nitems);
   filter->arycapa = arycapa;
