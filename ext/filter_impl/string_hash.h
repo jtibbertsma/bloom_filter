@@ -14,4 +14,13 @@ static const hash_func hashes[] = {
   0
 };
 
+#define HASH_ITERATE(str, hvar, block) do {                \
+  int _ind;                                                \
+  hash_func _func;                                         \
+  for (_ind = 0; (_func = hashes[_ind]) != 0; ++_ind) {    \
+    hvar = _func(str);                                     \
+    block                                                  \
+  }                                                        \
+} while (0)
+
 #endif
