@@ -1,2 +1,5 @@
 tmp
 *.bundle
+.ruby-version
+.DS_Store
+*.gem
