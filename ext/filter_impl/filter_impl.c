@@ -4,7 +4,7 @@
 #ifndef RB_OBJ_WRITE
 #  define FILTER_SET_BLOCK(f,b) (f)->block = (b)
 #else
-#  define FILTER_SET_BLOCK(f,b) RUBY_OBJ_WRITE((f), &(f)->block, (b))
+#  define FILTER_SET_BLOCK(f,b) RB_OBJ_WRITE((f), &(f)->block, (b))
 #endif
 
 #define FILTER_CHECK(f) do {                                                                \
@@ -13,6 +13,16 @@
   }                                                                                         \
 } while(0)
 
+#define FILTER_GET_STRING(f, str, cstr) do {    \
+  FILTER_CHECK(f);                              \
+  StringValue(str);                             \
+  cstr = RSTRING_PTR(str);                      \
+} while (0)
+
+static ID id_size;
+static ID id_each;
+static ID id_call;
+
 struct filter {
   long arycapa;
   VALUE block;
@@ -20,13 +30,15 @@ struct filter {
 };
 
 static VALUE
-add_item(struct filter *filter, VALUE item)
+add_item(struct filter *filter, VALUE str)
 {
-  VALUE str;
-  const char *cstr;
+  char *cstr;
+  size_t hash;
 
-  FILTER_GET_STRING(filter, item, str, cstr);
-  HASH_ITERATE
+  FILTER_GET_STRING(filter, str, cstr);
+  HASH_ITERATE(cstr, hash, {
+    FILTER_SET_BIT(filter, hash);
+  });
 
   return str;
 }
@@ -43,14 +55,14 @@ filter_free(void *ptr)
 {
   struct filter *filter = ptr;
 
-  if (filter->bitary) ruby_xfree(filter->bitary);
-  ruby_xfree(filter);
+  if (filter->bitary) xfree(filter->bitary);
+  xfree(filter);
 }
 
 static size_t
 filter_memsize(const void *ptr)
 {
-  struct filter *filter = ptr;
+  const struct filter *filter = ptr;
   size_t size = sizeof(struct filter);
 
   if (filter->bitary) {
@@ -61,12 +73,15 @@ filter_memsize(const void *ptr)
 }
 
 static const rb_data_type_t filter_type = {
+  "bloom_filter",
   {
     filter_mark,
     filter_free,
     filter_memsize
-  },
-  0, 0, RUBY_TYPED_FREE_IMMEDIATELY | RUBY_TYPED_WB_PROTECTED
+  }
+#ifdef RUBY_TYPED_FREE_IMMEDIATELY
+  , 0, 0, RUBY_TYPED_FREE_IMMEDIATELY | RUBY_TYPED_WB_PROTECTED
+#endif
 };
 
 static VALUE
@@ -82,12 +97,21 @@ filter_allocate(VALUE klass)
   return obj;
 }
 
+static VALUE
+init_i(RB_BLOCK_CALL_FUNC_ARGLIST(item, ptr))
+{
+  struct filter *filter = ptr;
+  add_item(filter, item);
+}
+
 /*
  * call-seq:
  *   BloomFilter.new(capa)                     -> filter
  *   BloomFilter.new(capa)  { |string| block } -> filter
  *   BloomFilter.new(array)                    -> filter
  *   BloomFilter.new(array) { |string| block } -> filter
+ *   BloomFilter.new(enum)                     -> filter
+ *   BloomFilter.new(enum)  { |string| block } -> filter
  *
  * Construct a new bloom filter.
  *
@@ -96,10 +120,13 @@ filter_allocate(VALUE klass)
  * the more optimal the resulting bloom array in terms of false positive rate
  * and memory usage.
  *
- * Instead of passing in a capacity, an array can be passed in instead. In this case,
+ * Instead of passing a capacity, an array can be passed in instead. In this case,
  * the array length is used as the capacity, and item in the array is added to the
- * filter. If the argument is not an array or a fixnum, then it should respond to
- * <code>size</code> and <code>each</code>.
+ * filter.
+ *
+ * If the argument is not an array or a fixnum, then it must respond to
+ * <code>size</code> and <code>each</code>. The size method must return a fixnum,
+ * and each item yielded by <code>each</code> will be aded to the filter.
  *
  * If a block is given, it will be called by <code>filter.query</code> when a
  * positive match is detected. The block can be set after initialization with
@@ -119,12 +146,13 @@ filter_initialize(VALUE obj, VALUE arg)
     break;
   case T_ARRAY:
     nitems = RARRAY_LEN(arg);
-    aryptr = RARRAY_CONST_PTR(arg);
+    aryptr = RARRAY_PTR(arg);
     break;
   default:
     try_each = 1;
-    tmp = rb_funcall(arg, rb_intern("size"), 0, NULL);
-    if (!FIXNUM_P(tmp)) rb_raise(rb_eArgError, "Invalid size");
+    tmp = rb_funcall(arg, id_size, 0, NULL);
+    if (!FIXNUM_P(tmp))
+      rb_raise(rb_eArgError, "Argument's size method returned an invalid size");
     nitems = FIX2LONG(tmp);
   }
   
@@ -135,13 +163,16 @@ filter_initialize(VALUE obj, VALUE arg)
    */
   arycapa = GET_ARYCAPA(nitems);
   filter->arycapa = arycapa;
-  if (arycapa > 0) filter->bitary = (long *)ruby_xcalloc(arycapa, sizeof(long));
+  if (arycapa > 0) filter->bitary = (long *)xcalloc(arycapa, sizeof(long));
 
   /* deal with array arg and try_each cases */
   if (aryptr) {
     for (i = 0; i < nitems; ++i) {
       add_item(filter, aryptr[i]);
     }
+  }
+  else if (try_each) {
+    rb_block_call(arg, id_each, 0, 0, init_i, (VALUE)filter);
   }
 
   /* store block */
@@ -154,8 +185,8 @@ filter_initialize(VALUE obj, VALUE arg)
 
 /*
  * call-seq:
- *   filter.add(item)   -> item.to_s
- *   filter << item     -> item.to_s
+ *   filter.add(item)   -> filter
+ *   filter << item     -> filter
  *
  * Add an item to the filter. Note that any object added to the filter is coerced
  * into a string.
@@ -166,7 +197,8 @@ filter_add_item(VALUE obj, VALUE item)
   struct filter *filter;
   TypedData_Get_Struct(obj, struct filter, &filter_type, filter);
 
-  return add_item(filter, item);
+  add_item(filter, item);
+  return obj;
 }
 
 /*
@@ -179,15 +211,23 @@ filter_add_item(VALUE obj, VALUE item)
  * object as the argument.
  */
 static VALUE
-filter_query_item(VALUE obj, VALUE item)
+filter_query_item(VALUE obj, VALUE str)
 {
-  VALUE str;
-  const char *cstr;
+  char *cstr;
   struct filter *filter;
+  size_t hash;
 
   TypedData_Get_Struct(obj, struct filter, &filter_type, filter);
-  FILTER_GET_STRING(filter, item, str, cstr);
-  HASH_ITERATE
+  FILTER_GET_STRING(filter, str, cstr);
+  HASH_ITERATE(cstr, hash, {
+    if (!FILTER_GET_BIT(filter, hash)) {
+      return Qfalse;
+    }
+  });
+
+  if (!NIL_P(filter->block))
+    rb_funcall(filter->block, id_call, 1, str);
+  return Qtrue;
 }
 
 /*
@@ -211,7 +251,7 @@ filter_handler(VALUE obj)
  *
  * Set the handler Proc. Note that we don't do type or arity checks on the Proc,
  * so setting a bogus object as the handler will cause an error to get thrown
- * down the line.
+ * when a positive match is found.
  */
 static VALUE
 filter_set_handler(VALUE obj, VALUE handler)
@@ -227,8 +267,8 @@ filter_set_handler(VALUE obj, VALUE handler)
  * Document-class: BloomFilter
  *
  * This is a bloom filter implementation that uses string hashes. Any object can
- * be added to the bloom filter, but objects will be converted to strings using
- * the to_s method before being hashed.
+ * be added to the bloom filter, but objects will be converted to strings before
+ * being hashed.
  *
  * This bloom filter implementation uses a ratio of 8 bits per item stored in the
  * set, yielding a 2% false positive rate. For this ratio, the optimal number of
@@ -249,5 +289,9 @@ Init_filter_impl()
   rb_define_method(cBloomFilter, "add", filter_add_item, 1);
   rb_define_alias(cBloomFilter, "<<", "add");
   rb_define_method(cBloomFilter, "query", filter_query_item, 1);
-  rb_define_alias(cBloomFilter, "include?", query);
+  rb_define_alias(cBloomFilter, "include?", "query");
+
+  id_each = rb_intern("each");
+  id_size = rb_intern("size");
+  id_call = rb_intern("call");
 }
