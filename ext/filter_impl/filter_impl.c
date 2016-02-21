@@ -1,17 +1,49 @@
 #include "ruby.h"
 #include "string_hash.h"
 
-#ifndef RB_OBJ_WRITE
-#  define FILTER_SET_BLOCK(f,b) (f)->block = (b)
+struct filter {
+  size_t arycapa;
+  VALUE block;
+  size_t *bitary;
+};
+
+#ifdef RB_OBJ_WRITE
+#  define FILTER_SET_BLOCK(f, b) RB_OBJ_WRITE((f), &(f)->block, (b))
 #else
-#  define FILTER_SET_BLOCK(f,b) RB_OBJ_WRITE((f), &(f)->block, (b))
+#  define FILTER_SET_BLOCK(f, b) (f)->block = (b)
+#endif
+
+#define GET_ARYCAPA(n) (n / sizeof(size_t))
+#define BITS_PER_SIZE_T (sizeof(size_t) * 8)
+#define TOTAL_BITS(f) ((f)->arycapa * BITS_PER_SIZE_T)
+#define BITS(f, bit) ((f)->bitary[bit / BITS_PER_SIZE_T])
+#define BIT(bit) (1 << (bit % BITS_PER_SIZE_T))
+
+#define FILTER_SET_BIT(f, hash) do {    \
+  size_t _bit = hash % TOTAL_BITS(f);   \
+  BITS((f),_bit) |= BIT(_bit);          \
+} while (0)
+
+#ifdef __GNUC__
+#define FILTER_GET_BIT(f, hash) ({      \
+  size_t _bit = hash % TOTAL_BITS(f);   \
+  BITS((f),_bit) | BIT(_bit);           \
+})
+#else
+#define FILTER_GET_BIT(f, hash) filter_get_bit(f, hash)
+static size_t
+filter_get_bit(struct filter *filter, size_t hash)
+{
+  size_t bit = hash % TOTAL_BITS(f);
+  return BITS(filter, bit) | BIT(bit);
+}
 #endif
 
 #define FILTER_CHECK(f) do {                                                                \
   if ((f)->bitary == 0) {                                                                   \
     rb_raise(rb_eRuntimeError, "Uninitialized bloom filter (capacity %ld)", (f)->arycapa);  \
   }                                                                                         \
-} while(0)
+} while (0)
 
 #define FILTER_GET_STRING(f, str, cstr) do {    \
   FILTER_CHECK(f);                              \
@@ -22,12 +54,6 @@
 static ID id_size;
 static ID id_each;
 static ID id_call;
-
-struct filter {
-  long arycapa;
-  VALUE block;
-  long *bitary;
-};
 
 static VALUE
 add_item(struct filter *filter, VALUE str)
@@ -100,8 +126,8 @@ filter_allocate(VALUE klass)
 static VALUE
 init_i(RB_BLOCK_CALL_FUNC_ARGLIST(item, ptr))
 {
-  struct filter *filter = ptr;
-  add_item(filter, item);
+  struct filter *filter = (struct filter *)ptr;
+  return add_item(filter, item);
 }
 
 /*
@@ -135,14 +161,14 @@ init_i(RB_BLOCK_CALL_FUNC_ARGLIST(item, ptr))
 static VALUE
 filter_initialize(VALUE obj, VALUE arg)
 {
-  long nitems, arycapa;
+  size_t nitems, arycapa;
   struct filter *filter;
   VALUE *aryptr = 0, tmp;
   int i, try_each = 0;
 
   switch (TYPE(arg)) {
   case T_FIXNUM:
-    nitems = FIX2LONG(arg);
+    nitems = FIX2ULONG(arg);
     break;
   case T_ARRAY:
     nitems = RARRAY_LEN(arg);
@@ -153,7 +179,7 @@ filter_initialize(VALUE obj, VALUE arg)
     tmp = rb_funcall(arg, id_size, 0, NULL);
     if (!FIXNUM_P(tmp))
       rb_raise(rb_eArgError, "Argument's size method returned an invalid size");
-    nitems = FIX2LONG(tmp);
+    nitems = FIX2ULONG(tmp);
   }
   
   TypedData_Get_Struct(obj, struct filter, &filter_type, filter);
@@ -163,7 +189,7 @@ filter_initialize(VALUE obj, VALUE arg)
    */
   arycapa = GET_ARYCAPA(nitems);
   filter->arycapa = arycapa;
-  if (arycapa > 0) filter->bitary = (long *)xcalloc(arycapa, sizeof(long));
+  if (arycapa > 0) filter->bitary = (size_t *)xcalloc(arycapa, sizeof(size_t));
 
   /* deal with array arg and try_each cases */
   if (aryptr) {
