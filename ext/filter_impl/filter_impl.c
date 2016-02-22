@@ -160,7 +160,7 @@ filter_initialize(VALUE obj, VALUE arg)
 
   switch (TYPE(arg)) {
   case T_FIXNUM:
-    nitems = FIX2ULONG(arg);
+    nitems = NUM2SIZET(arg);
     break;
   case T_ARRAY:
     nitems = RARRAY_LEN(arg);
@@ -171,7 +171,7 @@ filter_initialize(VALUE obj, VALUE arg)
     tmp = rb_funcall(arg, id_size, 0, NULL);
     if (!FIXNUM_P(tmp))
       rb_raise(rb_eArgError, "Argument's size method returned an invalid size");
-    nitems = FIX2ULONG(tmp);
+    nitems = NUM2SIZET(tmp);
   }
   
   TypedData_Get_Struct(obj, struct filter, &filter_type, filter);
@@ -282,6 +282,21 @@ filter_set_handler(VALUE obj, VALUE handler)
 }
 
 /*
+ * call-seq:
+ *   filter.size      -> Number
+ *   filter.length    -> Number
+ *
+ * Get the length of the underlying bit array in bytes.
+ */
+static VALUE
+filter_size(VALUE obj)
+{
+  struct filter *filter;
+  TypedData_Get_Struct(obj, struct filter, &filter_type, filter);
+  return SIZET2NUM(filter->arycapa * sizeof(size_t));
+}
+
+/*
  * Document-class: BloomFilter
  *
  * This is a bloom filter implementation that uses string hashes. Any object can
@@ -308,6 +323,8 @@ Init_filter_impl()
   rb_define_alias(cBloomFilter, "<<", "add");
   rb_define_method(cBloomFilter, "query", filter_query_item, 1);
   rb_define_alias(cBloomFilter, "include?", "query");
+  rb_define_method(cBloomFilter, "size", filter_size, 0);
+  rb_define_alias(cBloomFilter, "length", "size");
 
   id_each = rb_intern("each");
   id_size = rb_intern("size");
