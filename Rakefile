@@ -14,3 +14,7 @@ end
 task :release => :build do
   sh "gem push filter_bloom-#{BloomFilter::Version}.gem"
 end 
+
+task :clean do
+  sh "git clean -xdf"
+end
