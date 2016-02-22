@@ -7,12 +7,6 @@ struct filter {
   size_t *bitary;
 };
 
-#ifdef RB_OBJ_WRITE
-#  define FILTER_SET_BLOCK(f, b) RB_OBJ_WRITE((f), &(f)->block, (b))
-#else
-#  define FILTER_SET_BLOCK(f, b) (f)->block = (b)
-#endif
-
 #define GET_ARYCAPA(n) (n / sizeof(size_t))
 #define BITS_PER_SIZE_T (sizeof(size_t) * 8)
 #define TOTAL_BITS(f) ((f)->arycapa * BITS_PER_SIZE_T)
@@ -34,15 +28,15 @@ struct filter {
 static size_t
 filter_get_bit(struct filter *filter, size_t hash)
 {
-  size_t bit = hash % TOTAL_BITS(f);
+  size_t bit = hash % TOTAL_BITS(filter);
   return CHUNK(filter, bit) | BIT(bit);
 }
 #endif  /* __GNUC__ */
 
-#define FILTER_CHECK(f) do {                                                                \
-  if ((f)->bitary == 0) {                                                                   \
-    rb_raise(rb_eRuntimeError, "Uninitialized bloom filter (capacity %lu)", (f)->arycapa);  \
-  }                                                                                         \
+#define FILTER_CHECK(f) do {                                   \
+  if ((f)->bitary == 0) {                                      \
+    rb_raise(rb_eRuntimeError, "Uninitialized bloom filter");  \
+  }                                                            \
 } while (0)
 
 #define FILTER_GET_STRING(f, str, cstr) do {    \
@@ -104,10 +98,8 @@ static const rb_data_type_t filter_type = {
     filter_mark,
     filter_free,
     filter_memsize
-  }
-#ifdef RUBY_TYPED_FREE_IMMEDIATELY
-  , 0, 0, RUBY_TYPED_FREE_IMMEDIATELY | RUBY_TYPED_WB_PROTECTED
-#endif
+  },
+  0, 0, RUBY_TYPED_FREE_IMMEDIATELY | RUBY_TYPED_WB_PROTECTED
 };
 
 static VALUE
@@ -203,7 +195,7 @@ filter_initialize(VALUE obj, VALUE arg)
 
   /* store block */
   if (rb_block_given_p()) {
-    FILTER_SET_BLOCK(filter, rb_block_proc());
+    RB_OBJ_WRITE(filter, &filter->block, rb_block_proc());
   }
 
   return obj;
@@ -285,7 +277,7 @@ filter_set_handler(VALUE obj, VALUE handler)
   struct filter *filter;
   TypedData_Get_Struct(obj, struct filter, &filter_type, filter);
 
-  FILTER_SET_BLOCK(filter, handler);
+  RB_OBJ_WRITE(filter, &filter->block, handler);
   return handler;
 }
 

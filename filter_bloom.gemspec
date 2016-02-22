@@ -14,6 +14,8 @@ Gem::Specification.new do |s|
   s.licenses = ["MIT"]
   s.homepage = "http://github.com/jtibbertsma/bloom_filter"
 
+  s.required_ruby_version = '>= 2.1.0'
+
   s.add_development_dependency(%q<rdoc>, ["~> 4.0"])
   s.add_development_dependency(%q<rake-compiler>, ["~> 0.8.0"])
 end
