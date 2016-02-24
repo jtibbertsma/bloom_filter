@@ -33,8 +33,10 @@ filter_get_bit(struct filter *filter, size_t hash)
 }
 #endif  /* __GNUC__ */
 
+#define NULL_FILTER (struct filter *)0
+
 #define FILTER_CHECK(f) do {                                   \
-  if ((f)->bitary == 0) {                                      \
+  if ((f) && (f)->bitary == 0) {                               \
     rb_raise(rb_eRuntimeError, "Uninitialized bloom filter");  \
   }                                                            \
 } while (0)
@@ -297,6 +299,28 @@ filter_size(VALUE obj)
 }
 
 /*
+ * call-seq:
+ *   BloomFilter.hash_values(str)   -> Array
+ *
+ * For a given object, get an array containing the hash values returned by the
+ * bloom filter's hash functions.
+ */
+static VALUE
+filter_hash_values(VALUE klass, VALUE str)
+{
+  char *cstr;
+  size_t hash;
+  VALUE ary = rb_ary_new();
+
+  FILTER_GET_STRING(NULL_FILTER, str, cstr);
+  HASH_ITERATE(cstr, hash, {
+    rb_ary_push(ary, SIZET2NUM(hash));
+  });
+
+  return ary;
+}
+
+/*
  * Document-class: BloomFilter
  *
  * This is a bloom filter implementation that uses string hashes. Any object can
@@ -325,6 +349,7 @@ Init_filter_impl()
   rb_define_alias(cBloomFilter, "include?", "query");
   rb_define_method(cBloomFilter, "size", filter_size, 0);
   rb_define_alias(cBloomFilter, "length", "size");
+  rb_define_singleton_method(cBloomFilter, "hash_values", filter_hash_values, 1);
 
   id_each = rb_intern("each");
   id_size = rb_intern("size");
